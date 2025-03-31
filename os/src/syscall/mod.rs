@@ -27,6 +27,11 @@ mod process;
 use fs::*;
 use process::*;
 
+/// record function call
+pub fn record_syscall(stack_ptr: usize, func_id: usize) {
+    write_stack_func_count(stack_ptr, func_id);
+}
+
 /// handle syscall exception with `syscall_id` and other arguments
 pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
     match syscall_id {
