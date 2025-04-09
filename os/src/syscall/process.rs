@@ -4,6 +4,8 @@ use core::mem;
 use crate::{mm::{translated_byte_buffer, MapPermission, PTEFlags, VirtAddr}, task::{change_program_brk, current_user_token, exit_current_and_run_next, insert_mem, remove_mem, suspend_current_and_run_next}, timer::get_time_us};
 use crate::mm::PageTable;
 
+use alloc::vec::Vec;
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct TimeVal {
@@ -13,34 +15,36 @@ pub struct TimeVal {
 
 pub struct TraceInfo {
     stack_cnt: usize,
-    stack_ptr: [usize; 16],
-    func_cnt: [isize; 512 * 16],
+    stack_ptr: Vec<usize>,
+    func_cnt: Vec<[isize; 513]>,
     _idx: usize,
 }
 
 static mut SYSCALL_RECORD: TraceInfo = TraceInfo {
     stack_cnt: 0,
-    stack_ptr: [0; 16],
-    func_cnt: [0; 512 * 16],
+    stack_ptr: Vec::new(),
+    func_cnt: Vec::new(),
     _idx: 0,
 };
 
 impl TraceInfo {
     fn write_stack_func_count(&mut self, stack_ptr: usize, func_id: usize) {
         if let Some(idx) = (0..self.stack_cnt).find(|idx| self.stack_ptr[*idx] == stack_ptr) {
-            self.func_cnt[idx * 512 + func_id] += 1;
+            self.func_cnt[idx][func_id] += 1;
             self._idx = idx;
         } else {
-            let idx = self.stack_cnt;
+            self._idx = self.stack_cnt;
             self.stack_cnt += 1;
-            self.stack_ptr[idx] = stack_ptr;
-            self.func_cnt[idx * 512 + func_id] += 1;
-            self._idx = idx;
+            self.stack_ptr.push(stack_ptr);
+            
+            let mut cnt: [isize; 513] = [0; 513];
+            cnt[func_id] += 1;
+            self.func_cnt.push(cnt);
         }
     }
 
     fn read_stack_func_count(&self, func_id: usize) -> isize {
-        return self.func_cnt[self._idx * 512 + func_id];
+        return self.func_cnt[self._idx][func_id];
     }
 }
 
