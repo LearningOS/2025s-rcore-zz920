@@ -1,7 +1,7 @@
 //! Process management syscalls
 use core::mem;
 
-use crate::{mm::{frame_alloc, frame_dealloc, translated_byte_buffer, PTEFlags, VirtAddr, VirtPageNum}, task::{change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next}, timer::get_time_us};
+use crate::{mm::{translated_byte_buffer, MapPermission, PTEFlags, VirtAddr}, task::{change_program_brk, current_user_token, exit_current_and_run_next, insert_mem, remove_mem, suspend_current_and_run_next}, timer::get_time_us};
 use crate::mm::PageTable;
 
 #[repr(C)]
@@ -103,38 +103,48 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
     trace!("kernel: sys_trace");
-    unsafe {
-        match _trace_request {
-            0 => {
-                // 如果 trace_request 为 0，则 id 应被视作 *const u8 ，
-                // 表示读取当前任务 id 地址处一个字节的无符号整数值。
-                // 此时应忽略 data 参数。返回值为 id 地址处的值
-                let buffers = translated_byte_buffer(current_user_token(), _id as *const u8, 1);
-                if buffers.is_empty() {
-                    return -1;
+    match _trace_request {
+        0 => {
+            // 如果 trace_request 为 0，则 id 应被视作 *const u8 ，
+            // 表示读取当前任务 id 地址处一个字节的无符号整数值。
+            // 此时应忽略 data 参数。返回值为 id 地址处的值
+            let page_table = PageTable::from_token(current_user_token());
+
+            let addr = VirtAddr::from(_id);
+            if let Some(pte) = page_table.translate(addr.floor()) {
+                if pte.readable() && pte.flags() & PTEFlags::U != PTEFlags::empty() {
+                    return pte.ppn().get_bytes_array()[addr.page_offset()] as isize;
                 }
-                return buffers[0].as_ptr().read_volatile() as isize;
-            },
-            1 => {
-                // 如果 trace_request 为 1，则 id 应被视作 *const u8 ，
-                // 表示写入 data （作为 u8，即只考虑最低位的一个字节）到该用户程序 id 地址处。
-                // 返回值应为0。
-                let mut buffers = translated_byte_buffer(current_user_token(), _id as *const u8, 1);
-                if buffers.is_empty() {
-                    return -1;
-                }
-                buffers[0].as_mut_ptr().write_volatile(_data as u8);
-                return 0;
-            },
-            2 => {
-                // 如果 trace_request 为 2，
-                // 表示查询当前任务调用编号为 id 的系统调用的次数，
-                // 返回值为这个调用次数。本次调用也计入统计。
-                return read_stack_func_count(_id);
-            },
-            _ => {
-                return -1;
             }
+
+            return -1;
+
+        },
+        1 => {
+            // 如果 trace_request 为 1，则 id 应被视作 *const u8 ，
+            // 表示写入 data （作为 u8，即只考虑最低位的一个字节）到该用户程序 id 地址处。
+            // 返回值应为0。
+            
+            let page_table = PageTable::from_token(current_user_token());
+
+            let addr = VirtAddr::from(_id);
+            if let Some(pte) = page_table.translate(addr.floor()) {
+                if pte.writable() && pte.flags() & PTEFlags::U != PTEFlags::empty() {
+                    pte.ppn().get_bytes_array()[addr.page_offset()] = _data as u8;
+                    return 0;
+                }
+            }
+
+            return -1;
+        },
+        2 => {
+            // 如果 trace_request 为 2，
+            // 表示查询当前任务调用编号为 id 的系统调用的次数，
+            // 返回值为这个调用次数。本次调用也计入统计。
+            return read_stack_func_count(_id);
+        },
+        _ => {
+            return -1;
         }
     }
 }
@@ -148,30 +158,31 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
         return -1;
     }
 
-    let mut page_table = PageTable::from_token(current_user_token());
+    let page_table = PageTable::from_token(current_user_token());
     
     let start_address = VirtAddr::from(_start);
-    let end_address = VirtAddr::from(_start + _len - 1);
+    let end_address = VirtAddr::from(_start + _len);
 
     if !start_address.aligned() {
         // println!("_start address {:?} not aligned.", _start);
         return -1;
     }
 
-    for vpn in VirtPageNum::from(start_address).0..=end_address.floor().0 {
-        if page_table.translate(vpn.into()).is_some() {
-            // println!("VPN {:?} has already been occupied.", vpn);
-            return -1;
+    if (start_address.floor().0..end_address.ceil().0).any(|vpn| {
+        if let Some(pte) = page_table.translate(vpn.into()) {
+            if pte.is_valid() {
+                // println!("VPN {:?} has already been occupied.", vpn);
+                return true;
+            }
         }
-
-        if let Some(frame) = frame_alloc() {
-            page_table.map(vpn.into(), frame.ppn, PTEFlags::from_bits(_port as u8).unwrap() | PTEFlags::U);
-        } else {
-            // println!("Out of Memory!");
-            return -1;
-        }
+        return false;
+    }) {
+        
+        return -1;
     }
 
+    let perm = MapPermission::from_bits((_port as u8) << 1 | MapPermission::U.bits()).unwrap();
+    insert_mem(start_address, end_address, perm);
    
     0
 }
@@ -180,22 +191,31 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
     trace!("kernel: sys_munmap");
 
-    let mut page_table = PageTable::from_token(current_user_token());
+    let page_table = PageTable::from_token(current_user_token());
     
     let start_address = VirtAddr::from(_start);
-    let end_address = VirtAddr::from(_start + _len - 1);
+    let end_address = VirtAddr::from(_start + _len);
 
-    for vpn in start_address.floor().0..=end_address.floor().0 {
+    if !start_address.aligned() {
+        // println!("_start address {:?} not aligned.", _start);
+        return -1;
+    }
+
+    if (start_address.floor().0..end_address.ceil().0).any(|vpn| {
         if let Some(pte) = page_table.translate(vpn.into()) {
-            page_table.unmap(vpn.into());
-            frame_dealloc(pte.ppn());
-        } else {
-            // println!("VPN {:?} not alloc.", vpn);
-            return -1;
+            if pte.is_valid() {
+                return false;
+            }
         }
-    } 
 
-    0
+        // println!("VPN {:?} was not alloced.", vpn);
+        return true;
+    }) {
+        
+        return -1;
+    }
+
+    return remove_mem(start_address, end_address);
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

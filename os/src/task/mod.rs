@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -120,6 +121,22 @@ impl TaskManager {
         inner.tasks[inner.current_task].get_user_token()
     }
 
+    fn insert_mem(&self, start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].memory_set.insert_framed_area(start_va, end_va, perm);
+    }
+
+    #[deny(unused_variables)]
+    fn remove_mem(&self, start_va: VirtAddr, _end_va: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        match inner.tasks[cur].memory_set.remove(start_va) {
+            true => 0,
+            _ => 1,
+        }
+    }
+
     /// Get the current 'Running' task's trap contexts.
     fn get_current_trap_cx(&self) -> &'static mut TrapContext {
         let inner = self.inner.exclusive_access();
@@ -201,4 +218,14 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// insert memory to task
+pub fn insert_mem(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) {
+    TASK_MANAGER.insert_mem(start_va, end_va, perm);
+}
+
+/// shrink memory in task
+pub fn remove_mem(start_va: VirtAddr, end_va: VirtAddr) -> isize{
+    TASK_MANAGER.remove_mem(start_va, end_va)
 }

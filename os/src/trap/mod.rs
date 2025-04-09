@@ -60,7 +60,7 @@ pub fn trap_handler() -> ! {
     let cx = current_trap_cx();
     let scause = scause::read(); // get trap cause
     let stval = stval::read(); // get extra value
-    record_syscall(cx as *mut TrapContext as usize, cx.x[17]);
+    record_syscall(cx as *mut TrapContext as usize, 512);
     // trace!("into {:?}", scause.cause());
     match scause.cause() {
         Trap::Exception(Exception::UserEnvCall) => {
@@ -75,6 +75,7 @@ pub fn trap_handler() -> ! {
         | Trap::Exception(Exception::StorePageFault)
         | Trap::Exception(Exception::LoadFault)
         | Trap::Exception(Exception::LoadPageFault) => {
+            println!("trap: {:?}", scause.cause());
             println!("[kernel] PageFault in application, bad addr = {:#x}, bad instruction = {:#x}, kernel killed it.", stval, cx.sepc);
             exit_current_and_run_next();
         }

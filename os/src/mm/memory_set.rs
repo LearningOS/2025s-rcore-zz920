@@ -248,6 +248,23 @@ impl MemorySet {
         }
     }
 
+    /// remove the area
+    #[allow(unused)]
+    pub fn remove(&mut self, start: VirtAddr) -> bool {
+        if let Some((idx,area)) = self
+            .areas
+            .iter_mut()
+            .enumerate()
+            .find(|(idx, area)| area.vpn_range.get_start() == start.floor())
+        {
+            area.shrink_to(&mut self.page_table, start.floor());
+            self.areas.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
     /// append the area to new_end
     #[allow(unused)]
     pub fn append_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
@@ -280,6 +297,7 @@ impl MapArea {
     ) -> Self {
         let start_vpn: VirtPageNum = start_va.floor();
         let end_vpn: VirtPageNum = end_va.ceil();
+        // println!("create MapArea {}-{} {}", start_vpn.0, end_vpn.0, map_perm.bits());
         Self {
             vpn_range: VPNRange::new(start_vpn, end_vpn),
             data_frames: BTreeMap::new(),
