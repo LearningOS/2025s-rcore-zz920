@@ -1,6 +1,6 @@
 # 功能实现
 * 重写 sys_get_time 和 sys_trace： 都利用了translated_byte_buffer获取到实际的地址，对于横跨多个内存区域的地址数组，需要逐块将数据写入。
-* mmap 和 munmap 匿名映射： 将虚拟地址映射到VPN，使用page_table.translate判别VPN是否被映射，通过page_table.map实现对物理内存的映射；unmap是先去除PTE映射再回收物理内存。
+* mmap 和 munmap 匿名映射：使用TASK_MANAGER获取到memset，使用insert_framed_area函数直接插入内存块，使用shrink_to移除内存，之后再将area移出memset。
 
 # 简答
 1. 请列举 SV39 页表页表项的组成，描述其中的标志位有何作用？
