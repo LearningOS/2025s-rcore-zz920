@@ -53,6 +53,11 @@ impl OSInode {
         }
         v
     }
+    /// access inner inode
+    pub fn access_inode(&self) -> Arc<Inode> {
+        let inner = self.inner.exclusive_access();
+        Arc::clone(&inner.inode)
+    }
 }
 
 lazy_static! {
@@ -123,6 +128,19 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
             Arc::new(OSInode::new(readable, writable, inode))
         })
     }
+}
+
+/// link a file
+pub fn link_file(name: &str, new_name: &str) -> isize {
+    if name == new_name {
+        return -1;
+    }
+    ROOT_INODE.link(name, new_name)
+}
+
+/// unlink file
+pub fn unlink_file(name: &str) -> isize {
+    ROOT_INODE.unlink(name)
 }
 
 impl File for OSInode {
